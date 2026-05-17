@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BarChart3, Home, Users, Calculator, TrendingUp, Plus, Trash2, Filter } from 'lucide-react';
+import { BarChart3, Home, Users, Calculator, TrendingUp, Plus, Trash2 } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -409,11 +409,10 @@ function RentalYieldCalculator({ calculateRentalYield }) {
   const [insurance, setInsurance] = useState(80);
   const [maintenance, setMaintenance] = useState(100);
   const [management, setManagement] = useState(10);
-  const [voidPercent, setVoidPercent] = useState(5);
   const [result, setResult] = useState(null);
 
   const handleCalculate = () => {
-    const r = calculateRentalYield(propertyValue, monthlyRent, rates * 12, insurance * 12, maintenance * 12, (monthlyRent * management / 100) * 12, voidPercent);
+    const r = calculateRentalYield(propertyValue, monthlyRent, rates * 12, insurance * 12, maintenance * 12, (monthlyRent * management / 100) * 12, 5);
     setResult(r);
   };
 
