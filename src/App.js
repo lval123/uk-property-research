@@ -9,6 +9,7 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [comparables, setComparables] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchStatus, setSearchStatus] = useState('');
 
   const addProperty = (property) => {
     setProperties([...properties, { ...property, id: Date.now() }]);
@@ -35,36 +36,41 @@ export default function App() {
   };
 
   const searchProperties = async (area, minBudget, maxBudget, type) => {
-    setIsSearching(true);
-    const mockResults = generateMockResults(area, minBudget, maxBudget, type);
-    setSearchResults(mockResults);
-    generateComparables(mockResults);
-    setIsSearching(false);
-  };
-
-  const generateMockResults = (area, minBudget, maxBudget, type) => {
-    const propertyTypes = type === 'all' ? ['Flat', 'House', 'Terraced'] : [type];
-    const results = [];
-    
-    for (let i = 0; i < 8; i++) {
-      const price = minBudget + Math.random() * (maxBudget - minBudget);
-      const beds = Math.floor(Math.random() * 4) + 1;
-      const sqft = 500 + beds * 400 + Math.random() * 500;
-      
-      results.push({
-        id: `search-${Date.now()}-${i}`,
-        address: `${i + 1} ${['Oak', 'Elm', 'Maple'][Math.floor(Math.random() * 3)]} Street, ${area}`,
-        area,
-        price: Math.round(price),
-        beds,
-        sqft: Math.round(sqft),
-        type: propertyTypes[Math.floor(Math.random() * propertyTypes.length)],
-        pricePerSqft: Math.round(price / sqft),
-        source: ['Rightmove', 'Zoopla'][Math.floor(Math.random() * 2)]
-      });
+    if (!area) {
+      alert('Please enter an area');
+      return;
     }
-    
-    return results.sort((a, b) => a.price - b.price);
+
+    setIsSearching(true);
+    setSearchStatus('Searching Rightmove...');
+    setSearchResults([]);
+
+    try {
+      const params = new URLSearchParams({
+        area: area,
+        minPrice: minBudget,
+        maxPrice: maxBudget,
+        type: type
+      });
+
+      const response = await fetch(`/api/scrape?${params}`);
+      const data = await response.json();
+
+      if (data.isMock) {
+        setSearchStatus('⚠️ Using demo data (scraping temporarily unavailable)');
+      } else {
+        setSearchStatus(`✅ Found ${data.count} real Rightmove listings`);
+      }
+
+      setSearchResults(data.data);
+      generateComparables(data.data);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchStatus('Error searching. Please try again.');
+      alert('Search failed: ' + error.message);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const generateComparables = (results) => {
@@ -223,11 +229,13 @@ export default function App() {
                   <option value="all">All Types</option>
                   <option value="Flat">Flat</option>
                   <option value="House">House</option>
+                  <option value="Terraced">Terraced</option>
                 </select>
                 <button onClick={() => searchProperties(window.searchArea || 'London', parseFloat(window.minBudget) || 200000, parseFloat(window.maxBudget) || 500000, window.type || 'all')} disabled={isSearching} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 font-medium">
                   {isSearching ? 'Searching...' : 'Search'}
                 </button>
               </div>
+              {searchStatus && <p className="text-sm text-gray-600">{searchStatus}</p>}
             </div>
 
             {searchResults.length > 0 && (
@@ -240,7 +248,7 @@ export default function App() {
                       <div className="flex justify-between items-start mb-4">
                         <div>
                           <h3 className="text-lg font-bold text-gray-900">{result.address}</h3>
-                          <p className="text-sm text-gray-600">{result.beds} bed • {result.sqft} sqft</p>
+                          <p className="text-sm text-gray-600">{result.beds} bed • {result.sqft} sqft • {result.type}</p>
                         </div>
                         <div className={`px-4 py-2 rounded font-bold text-white ${analysis.isGoodDeal ? 'bg-green-600' : 'bg-red-600'}`}>
                           {analysis.isGoodDeal ? '✅ GO' : '❌ NO-GO'}
