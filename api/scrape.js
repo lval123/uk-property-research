@@ -1,6 +1,3 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,69 +16,39 @@ export default async function handler(req, res) {
   }
 
   try {
-    const typeParam = type && type !== 'all' ? `&propertyType=${type}` : '';
+    // Build Rightmove URL
+    const typeParam = type && type !== 'all' ? `&propertyType=${encodeURIComponent(type)}` : '';
     const priceMin = minPrice ? `&minPrice=${minPrice}` : '';
     const priceMax = maxPrice ? `&maxPrice=${maxPrice}` : '';
     
     const url = `https://www.rightmove.co.uk/property-for-sale/find.html?searchLocation=${encodeURIComponent(area)}${priceMin}${priceMax}${typeParam}&sortType=6&index=0&pageSize=25`;
 
-    const { data } = await axios.get(url, {
+    console.log('Fetching:', url);
+
+    const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-GB,en;q=0.9',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
       },
-      timeout: 10000
+      timeout: 15000
     });
 
-    const $ = cheerio.load(data);
-    const properties = [];
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
 
-    $('div[data-test="propertyCard"]').each((i, elem) => {
-      if (properties.length >= 25) return;
+    const html = await response.text();
 
-      try {
-        const address = $(elem).find('h2[data-test="propertyCardHeader"] a').text().trim();
-        const priceText = $(elem).find('span[data-test="propertyCardPrice"]').text().trim();
-        const bedsText = $(elem).find('span[data-test="propertyCardBedrooms"]').text().trim();
-        const sqftText = $(elem).find('span[data-test="propertyCardFloorArea"]').text().trim();
-        const typeText = $(elem).find('span[data-test="propertyCardType"]').text().trim();
-
-        if (!address || !priceText) return;
-
-        // Parse price (£300,000)
-        const price = parseInt(priceText.replace(/[^0-9]/g, '')) || 0;
-        if (price === 0) return;
-
-        // Parse beds (3 bed)
-        const beds = parseInt(bedsText) || 0;
-
-        // Parse sqft
-        const sqft = sqftText ? parseInt(sqftText.replace(/[^0-9]/g, '')) : 1000;
-
-        // Get type
-        const propertyType = typeText || 'Unknown';
-
-        properties.push({
-          id: `rightmove-${Date.now()}-${i}`,
-          address,
-          area,
-          price,
-          beds: beds || 2,
-          sqft: sqft || 1000,
-          type: propertyType,
-          pricePerSqft: Math.round(price / (sqft || 1000)),
-          source: 'Rightmove',
-          url: $(elem).find('h2 a').attr('href')
-        });
-      } catch (e) {
-        console.log('Error parsing property:', e.message);
-      }
-    });
+    // Parse properties from HTML
+    const properties = parseProperties(html, area);
 
     if (properties.length === 0) {
-      // Fallback to mock data if scraping fails
       return res.json({
         success: false,
-        message: 'No properties found. Using demo data.',
+        message: 'No properties found',
         data: generateMockData(area, minPrice, maxPrice, type),
         isMock: true
       });
@@ -90,14 +57,13 @@ export default async function handler(req, res) {
     res.json({
       success: true,
       count: properties.length,
-      data: properties.sort((a, b) => a.price - b.price),
+      data: properties.slice(0, 25),
       isMock: false
     });
 
   } catch (error) {
-    console.error('Scraping error:', error.message);
+    console.error('Error:', error.message);
     
-    // Return mock data on error
     res.json({
       success: false,
       message: 'Scraping failed, using demo data',
@@ -107,10 +73,88 @@ export default async function handler(req, res) {
   }
 }
 
+function parseProperties(html, area) {
+  const properties = [];
+  
+  // Extract JSON data from HTML (Rightmove stores data in window.__INITIAL_STATE__)
+  const jsonMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.*?})<\/script>/s);
+  
+  if (jsonMatch) {
+    try {
+      const data = JSON.parse(jsonMatch[1]);
+      const results = data?.properties?.list || [];
+      
+      results.forEach((prop, i) => {
+        if (properties.length >= 25) return;
+        
+        try {
+          const address = prop.displayAddress || '';
+          const price = prop.price?.amount || 0;
+          const bedrooms = prop.bedrooms || 0;
+          const propertyType = prop.propertyType || 'Unknown';
+          
+          if (!address || price === 0) return;
+          
+          // Estimate sqft (rough calculation)
+          const sqft = Math.max(800, (bedrooms || 2) * 400 + 400);
+          
+          properties.push({
+            id: `rightmove-${Date.now()}-${i}`,
+            address,
+            area,
+            price,
+            beds: bedrooms || 2,
+            sqft,
+            type: propertyType,
+            pricePerSqft: Math.round(price / sqft),
+            source: 'Rightmove',
+            url: `https://www.rightmove.co.uk${prop.propertyUrl}` || ''
+          });
+        } catch (e) {
+          console.log('Parse error:', e.message);
+        }
+      });
+    } catch (e) {
+      console.log('JSON parse error:', e.message);
+    }
+  }
+
+  // Fallback: regex parsing
+  if (properties.length === 0) {
+    const propertyRegex = /property-for-sale\/([^"]+)">([^<]+)<\/a>[\s\S]*?£([\d,]+)/g;
+    let match;
+    
+    while ((match = propertyRegex.exec(html)) && properties.length < 25) {
+      try {
+        const address = match[2].trim();
+        const price = parseInt(match[3].replace(/,/g, ''));
+        
+        if (price > 0) {
+          properties.push({
+            id: `rightmove-${Date.now()}-${properties.length}`,
+            address,
+            area,
+            price,
+            beds: 2,
+            sqft: 1000,
+            type: 'House',
+            pricePerSqft: Math.round(price / 1000),
+            source: 'Rightmove'
+          });
+        }
+      } catch (e) {
+        console.log('Regex error:', e.message);
+      }
+    }
+  }
+
+  return properties;
+}
+
 function generateMockData(area, minPrice, maxPrice, type) {
   const min = parseInt(minPrice) || 200000;
   const max = parseInt(maxPrice) || 500000;
-  const propertyTypes = type && type !== 'all' ? [type] : ['Flat', 'House', 'Terraced'];
+  const propertyTypes = type && type !== 'all' ? [type] : ['Flat', 'House', 'Terraced', 'Semi-Detached'];
   const properties = [];
 
   for (let i = 0; i < 25; i++) {
@@ -120,7 +164,7 @@ function generateMockData(area, minPrice, maxPrice, type) {
 
     properties.push({
       id: `mock-${Date.now()}-${i}`,
-      address: `${i + 1} ${['Oak', 'Elm', 'Maple', 'Pine'][Math.floor(Math.random() * 4)]} Street, ${area}`,
+      address: `${i + 1} ${['Oak', 'Elm', 'Maple', 'Pine', 'Birch', 'Cedar'][Math.floor(Math.random() * 6)]} Street, ${area}`,
       area,
       price: Math.round(price),
       beds,
