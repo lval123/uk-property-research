@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BarChart3, Home, Users, Calculator, TrendingUp, Plus, Trash2, Search } from 'lucide-react';
+import { BarChart3, Home, Plus, Trash2, Search, Calculator } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
